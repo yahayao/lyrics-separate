@@ -3,8 +3,8 @@
 """
 音频文件歌词标签处理程序
 支持提取、处理和注入多语言双语歌词到音频文件标签中
-- 支持中英、日英、韩英双语歌词分离
-- 智能识别平假名、片假名、汉字、韩文、英文
+- 支持中英、日英双语歌词分离
+- 智能识别平假名、片假名、汉字、英文
 - 将混合语言的单行歌词分离为多行统一时间戳歌词
 支持的格式：FLAC, MP3, OGG, MP4/M4A
 """
@@ -205,30 +205,26 @@ class LyricsProcessor:
         has_katakana = bool(re.search(r'[\u30a0-\u30ff]', text))  # 片假名
         has_kanji = bool(re.search(r'[\u4e00-\u9fff]', text))     # 汉字
         has_english = bool(re.search(r'[a-zA-Z]', text))          # 英文字母
-        has_korean = bool(re.search(r'[\uac00-\ud7af]', text))    # 韩文
         
         # 判断是否包含日文（有假名就认为是日文）
         is_japanese_context = has_hiragana or has_katakana
         
         # 如果包含日文（假名），进行分离
         if is_japanese_context:
-            # 保持字符顺序的分离方法
-            japanese_parts = []
-            other_parts = []
-            current_japanese = ""
-            current_other = ""
-            last_type = None
+            # 在日语上下文中，分离出三种类型：日文、英文、中文
+            japanese_parts = []  # 日文（假名 + 相关汉字）
+            english_parts = []   # 英文
+            chinese_parts = []   # 中文（非日语汉字）
             
             i = 0
             while i < len(text):
                 char = text[i]
-                char_type = None
                 
                 if '\u3040' <= char <= '\u309f' or '\u30a0' <= char <= '\u30ff':
                     # 假名：肯定是日文
-                    char_type = 'japanese'
+                    japanese_parts.append(char)
                 elif '\u4e00' <= char <= '\u9fff':
-                    # 汉字：需要判断上下文
+                    # 汉字：需要判断是日文汉字还是中文汉字
                     is_japanese_kanji = False
                     
                     # 首先检查紧邻位置（前后1个字符，忽略空格）
@@ -271,63 +267,81 @@ class LyricsProcessor:
                             if ('\u3040' <= next_char <= '\u309f' or '\u30a0' <= next_char <= '\u30ff'):
                                 is_japanese_kanji = True
                     
-                    char_type = 'japanese' if is_japanese_kanji else 'other'
+                    # 根据判断结果分类汉字
+                    if is_japanese_kanji:
+                        japanese_parts.append(char)
+                    else:
+                        chinese_parts.append(char)
+                elif char.isalpha() and ord(char) < 128:
+                    # ASCII英文字母
+                    english_parts.append(char)
                 elif char == ' ':
-                    # 空格：判断它应该属于哪一部分
-                    # 查看前后字符来决定
-                    belongs_to_japanese = False
+                    # 空格需要根据上下文分配
+                    # 检查前后字符来决定空格属于哪个部分
+                    assigned = False
                     
-                    # 检查前面的字符
-                    if i > 0:
+                    # 优先分配给英文（保持英文单词完整）
+                    if i > 0 and i < len(text) - 1:
                         prev_char = text[i-1]
-                        if ('\u3040' <= prev_char <= '\u309f' or '\u30a0' <= prev_char <= '\u30ff'):
-                            belongs_to_japanese = True
-                    
-                    # 检查后面的字符
-                    if not belongs_to_japanese and i < len(text) - 1:
                         next_char = text[i+1]
-                        if ('\u3040' <= next_char <= '\u309f' or '\u30a0' <= next_char <= '\u30ff'):
-                            belongs_to_japanese = True
+                        if (prev_char.isalpha() and ord(prev_char) < 128) or (next_char.isalpha() and ord(next_char) < 128):
+                            english_parts.append(char)
+                            assigned = True
                     
-                    char_type = 'japanese' if belongs_to_japanese else 'other'
+                    # 如果不能分配给英文，检查是否应该分配给日文
+                    if not assigned:
+                        if i > 0:
+                            prev_char = text[i-1]
+                            if '\u3040' <= prev_char <= '\u309f' or '\u30a0' <= prev_char <= '\u30ff':
+                                japanese_parts.append(char)
+                                assigned = True
+                        
+                        if not assigned and i < len(text) - 1:
+                            next_char = text[i+1]
+                            if '\u3040' <= next_char <= '\u309f' or '\u30a0' <= next_char <= '\u30ff':
+                                japanese_parts.append(char)
+                                assigned = True
+                    
+                    # 最后分配给中文
+                    if not assigned:
+                        chinese_parts.append(char)
                 else:
-                    # 其他字符（英文、标点等）
-                    char_type = 'other'
+                    # 其他标点符号等，按照就近原则分配
+                    if char in '\'"':
+                        # 英文引号和撇号跟英文
+                        english_parts.append(char)
+                    elif char in '.,!?;:()[]{}':
+                        # 其他标点跟中文
+                        chinese_parts.append(char)  
+                    else:
+                        # 其他符号跟英文
+                        english_parts.append(char)
                 
-                # 根据字符类型添加到相应部分
-                if char_type == 'japanese':
-                    # 如果之前有other内容且现在切换到japanese，先保存other
-                    if current_other.strip():
-                        other_parts.append(current_other)
-                        current_other = ""
-                    current_japanese += char
-                else:  # char_type == 'other'
-                    # 如果之前有japanese内容且现在切换到other，先保存japanese
-                    if current_japanese.strip():
-                        japanese_parts.append(current_japanese)
-                        current_japanese = ""
-                    current_other += char
-                
-                last_type = char_type
                 i += 1
             
-            # 保存最后的内容
-            if current_japanese.strip():
-                japanese_parts.append(current_japanese)
-            if current_other.strip():
-                other_parts.append(current_other)
-            
-            # 合并所有部分
+            # 合并各部分
             japanese_text = ''.join(japanese_parts).strip()
-            other_text = ''.join(other_parts).strip()
+            english_text = ''.join(english_parts).strip()
+            chinese_text = ''.join(chinese_parts).strip()
             
-            # 只清理多余空格，保持必要空格
+            # 清理多余空格
             japanese_text = re.sub(r'\s+', ' ', japanese_text).strip()
-            other_text = re.sub(r'\s+', ' ', other_text).strip()
+            english_text = re.sub(r'\s+', ' ', english_text).strip()
+            chinese_text = re.sub(r'\s+', ' ', chinese_text).strip()
             
-            # 如果两部分都有内容，返回分离结果
-            if len(japanese_text) > 0 and len(other_text) > 0:
-                return [japanese_text, other_text]
+            # 根据内容决定分离策略
+            if len(chinese_text) > 0 and (len(japanese_text) > 0 or len(english_text) > 0):
+                # 有中文需要分离：日英保持在第一行，中文在第二行
+                first_line_parts = []
+                if len(japanese_text) > 0:
+                    first_line_parts.append(japanese_text)
+                if len(english_text) > 0:
+                    first_line_parts.append(english_text)
+                
+                first_line = ' '.join(first_line_parts).strip()
+                return [first_line, chinese_text]
+            # 如果只有日英，无中文：不分离，保持原文
+            # 因为要求是只将中文移到第二行，日英保持原位置
         
         # 如果是纯中英文（无日文），也进行分离
         elif has_english and has_kanji and not is_japanese_context:
@@ -335,15 +349,15 @@ class LyricsProcessor:
             english_chars = []
             
             for char in text:
-                if char.isalpha() and ord(char) < 128:  # ASCII英文
+                if (char.isalpha() and ord(char) < 128) or char.isdigit():  # ASCII英文字母或数字
                     english_chars.append(char)
                 elif '\u4e00' <= char <= '\u9fff':      # 中文汉字
                     chinese_chars.append(char)
                 elif char in ' \t\n\r.,!?;:\'"()[]{}':  # 标点符号
-                    # 简单策略：空格跟英文，其他标点跟中文
-                    if char == ' ':
+                    # 英文相关标点跟英文，中文相关标点跟中文
+                    if char in ' \'".,!?()[]':  # 常见英文标点跟英文
                         english_chars.append(char)
-                    else:
+                    else:  # 其他标点（如冒号、分号等）跟中文
                         chinese_chars.append(char)
                 else:
                     # 其他字符跟中文
@@ -356,29 +370,7 @@ class LyricsProcessor:
             english_text = re.sub(r'\s+', ' ', english_text).strip()
             
             if len(chinese_text) > 0 and len(english_text) > 1:
-                return [chinese_text, english_text]
-        
-        # 韩英分离
-        elif has_english and has_korean:
-            korean_chars = []
-            english_chars = []
-            
-            for char in text:
-                if char.isalpha() and ord(char) < 128:
-                    english_chars.append(char)
-                elif '\uac00' <= char <= '\ud7af':
-                    korean_chars.append(char)
-                elif char == ' ':
-                    english_chars.append(char)
-                else:
-                    korean_chars.append(char)
-            
-            korean_text = ''.join(korean_chars).strip()
-            english_text = ''.join(english_chars).strip()
-            english_text = re.sub(r'\s+', ' ', english_text).strip()
-            
-            if len(korean_text) > 0 and len(english_text) > 1:
-                return [korean_text, english_text]
+                return [english_text, chinese_text]
         
         # 无法分离，返回原文
         return [text]
