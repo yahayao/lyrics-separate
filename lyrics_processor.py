@@ -189,6 +189,51 @@ class LyricsProcessor:
             print(f"LRC文件处理失败 {file_path}: {str(e)}")
             return None
     
+    def _is_metadata_line(self, line: str) -> bool:
+        """判断是否为元数据行（不需要分离处理的行）"""
+        line = line.strip()
+        
+        # 检查常见的LRC元数据标签
+        metadata_patterns = [
+            r'^\[by:.*\]$',           # [by:作者]
+            r'^\[ar:.*\]$',           # [ar:艺术家]
+            r'^\[ti:.*\]$',           # [ti:标题]
+            r'^\[al:.*\]$',           # [al:专辑]
+            r'^\[offset:.*\]$',       # [offset:偏移]
+            r'^\[re:.*\]$',           # [re:LRC制作者]
+            r'^\[ve:.*\]$',           # [ve:版本]
+            r'^\[length:.*\]$',       # [length:长度]
+        ]
+        
+        for pattern in metadata_patterns:
+            if re.match(pattern, line):
+                return True
+        
+        # 检查是否包含时间戳的元数据行
+        timestamp_match = re.match(r'^(\[\d{2}:\d{2}\.\d{2,3}\])', line)
+        if timestamp_match:
+            content = line[len(timestamp_match.group(1)):].strip()
+            
+            # 作词、作曲、编曲等信息行
+            metadata_content_patterns = [
+                r'^作词\s*[:：]',         # 作词：xxx
+                r'^作曲\s*[:：]',         # 作曲：xxx  
+                r'^编曲\s*[:：]',         # 编曲：xxx
+                r'^制作人\s*[:：]',       # 制作人：xxx
+                r'^演唱\s*[:：]',         # 演唱：xxx
+                r'^歌手\s*[:：]',         # 歌手：xxx
+                r'^专辑\s*[:：]',         # 专辑：xxx
+                r'^发行\s*[:：]',         # 发行：xxx
+                r'^词\s*[:：]',           # 词：xxx
+                r'^曲\s*[:：]',           # 曲：xxx
+            ]
+            
+            for pattern in metadata_content_patterns:
+                if re.match(pattern, content):
+                    return True
+        
+        return False
+
     def parse_bilingual_lyrics(self, lyrics_text: str) -> List[str]:
         """解析双语歌词，将单行双语歌词分离成两行"""
         if not lyrics_text:
@@ -201,6 +246,11 @@ class LyricsProcessor:
             line = line.strip()
             if not line:
                 processed_lines.append('')
+                continue
+            
+            # 检查是否为元数据行，如果是则不处理
+            if self._is_metadata_line(line):
+                processed_lines.append(line)
                 continue
                 
             # 检查是否包含时间戳
@@ -246,123 +296,138 @@ class LyricsProcessor:
         
         # 如果包含日文（假名），进行分离
         if is_japanese_context:
-            # 在日语上下文中，分离出三种类型：日文、英文、中文
-            japanese_parts = []  # 日文（假名 + 相关汉字）
-            english_parts = []   # 英文
-            chinese_parts = []   # 中文（非日语汉字）
+            # 使用基于空格分隔词组的策略来更准确地分类汉字
+            char_assignments = ['unassigned'] * len(text)
             
-            i = 0
-            while i < len(text):
-                char = text[i]
-                
+            # 第一步：分配假名（肯定是日文）
+            for i, char in enumerate(text):
                 if '\u3040' <= char <= '\u309f' or '\u30a0' <= char <= '\u30ff':
-                    # 假名：肯定是日文
-                    japanese_parts.append(char)
-                elif '\u4e00' <= char <= '\u9fff':
-                    # 汉字：需要判断是日文汉字还是中文汉字
-                    is_japanese_kanji = False
+                    char_assignments[i] = 'japanese'
+            
+            # 第二步：按空格分割的词组来分配汉字
+            words = text.split(' ')
+            current_pos = 0
+            
+            for word in words:
+                if not word:  # 跳过空字符串
+                    current_pos += 1  # 空格的位置
+                    continue
                     
-                    # 首先检查紧邻位置（前后1个字符，忽略空格）
-                    # 紧邻假名的汉字肯定是日文
-                    if i > 0:
-                        prev_char = text[i-1]
-                        if prev_char != ' ' and ('\u3040' <= prev_char <= '\u309f' or '\u30a0' <= prev_char <= '\u30ff'):
-                            is_japanese_kanji = True
-                    
-                    if not is_japanese_kanji and i < len(text) - 1:
-                        next_char = text[i+1]
-                        if next_char != ' ' and ('\u3040' <= next_char <= '\u309f' or '\u30a0' <= next_char <= '\u30ff'):
-                            is_japanese_kanji = True
-                    
-                    # 如果不是紧邻假名，检查是否在连续汉字序列中，且序列与假名相邻
-                    if not is_japanese_kanji:
-                        # 查找当前汉字所在的连续汉字序列
-                        start = i
-                        while start > 0 and ('\u4e00' <= text[start-1] <= '\u9fff' or text[start-1] == ' '):
-                            if text[start-1] != ' ':  # 只有遇到汉字才移动
-                                start -= 1
-                            else:
-                                break  # 遇到空格就停止
-                        
-                        end = i
-                        while end < len(text)-1 and ('\u4e00' <= text[end+1] <= '\u9fff' or text[end+1] == ' '):
-                            if text[end+1] != ' ':  # 只有遇到汉字才移动
-                                end += 1
-                            else:
-                                break  # 遇到空格就停止
-                        
-                        # 检查汉字序列的紧邻位置是否有假名
-                        if start > 0:
-                            prev_char = text[start-1]
-                            if ('\u3040' <= prev_char <= '\u309f' or '\u30a0' <= prev_char <= '\u30ff'):
-                                is_japanese_kanji = True
-                        
-                        if not is_japanese_kanji and end < len(text)-1:
-                            next_char = text[end+1]
-                            if ('\u3040' <= next_char <= '\u309f' or '\u30a0' <= next_char <= '\u30ff'):
-                                is_japanese_kanji = True
-                    
-                    # 根据判断结果分类汉字
-                    if is_japanese_kanji:
-                        japanese_parts.append(char)
-                    else:
-                        chinese_parts.append(char)
-                elif char.isalpha() and ord(char) < 128:
-                    # ASCII英文字母
-                    english_parts.append(char)
-                elif char == ' ':
-                    # 空格需要根据上下文分配
-                    # 检查前后字符来决定空格属于哪个部分
-                    assigned = False
-                    
-                    # 优先分配给英文（保持英文单词完整）
-                    if i > 0 and i < len(text) - 1:
-                        prev_char = text[i-1]
-                        next_char = text[i+1]
-                        if (prev_char.isalpha() and ord(prev_char) < 128) or (next_char.isalpha() and ord(next_char) < 128):
-                            english_parts.append(char)
-                            assigned = True
-                    
-                    # 如果不能分配给英文，检查是否应该分配给日文
-                    if not assigned:
-                        if i > 0:
-                            prev_char = text[i-1]
-                            if '\u3040' <= prev_char <= '\u309f' or '\u30a0' <= prev_char <= '\u30ff':
-                                japanese_parts.append(char)
-                                assigned = True
-                        
-                        if not assigned and i < len(text) - 1:
-                            next_char = text[i+1]
-                            if '\u3040' <= next_char <= '\u309f' or '\u30a0' <= next_char <= '\u30ff':
-                                japanese_parts.append(char)
-                                assigned = True
-                    
-                    # 最后分配给中文
-                    if not assigned:
-                        chinese_parts.append(char)
-                else:
-                    # 其他标点符号等，按照就近原则分配
-                    if char in '\'"':
-                        # 英文引号和撇号跟英文
-                        english_parts.append(char)
-                    elif char in '.,!?;:()[]{}':
-                        # 其他标点跟中文
-                        chinese_parts.append(char)  
-                    else:
-                        # 其他符号跟英文
-                        english_parts.append(char)
+                # 分析这个词组的语言特征
+                word_has_hiragana = any('\u3040' <= c <= '\u309f' for c in word)
+                word_has_katakana = any('\u30a0' <= c <= '\u30ff' for c in word)
+                word_has_kanji = any('\u4e00' <= c <= '\u9fff' for c in word)
                 
-                i += 1
+                # 判断词组的语言类型
+                if word_has_hiragana or word_has_katakana:
+                    # 有假名的词组，所有汉字都是日文
+                    word_type = 'japanese'
+                elif word_has_kanji and not word_has_hiragana and not word_has_katakana:
+                    # 纯汉字词组，判断为中文（因为日文中的汉字通常伴随假名）
+                    word_type = 'chinese'
+                else:
+                    # 其他情况，默认中文
+                    word_type = 'chinese'
+                
+                # 为词组中的所有汉字分配类型
+                for j, char in enumerate(word):
+                    char_pos = current_pos + j
+                    if char_pos < len(char_assignments) and '\u4e00' <= char <= '\u9fff' and char_assignments[char_pos] == 'unassigned':
+                        char_assignments[char_pos] = word_type
+                
+                current_pos += len(word) + 1  # +1 for the space after the word            # 第三步：分配英文字母
+            for i, char in enumerate(text):
+                if char.isalpha() and ord(char) < 128 and char_assignments[i] == 'unassigned':
+                    char_assignments[i] = 'english'
             
-            # 合并各部分
-            japanese_text = ''.join(japanese_parts).strip()
-            english_text = ''.join(english_parts).strip()
-            chinese_text = ''.join(chinese_parts).strip()
+            # 第四步：分配标点符号和其他字符
+            for i, char in enumerate(text):
+                if char_assignments[i] == 'unassigned':
+                    if char == ' ':
+                        # 空格根据前后字符分配
+                        assigned = False
+                        # 优先跟英文（保持单词完整）
+                        if i > 0 and char_assignments[i-1] == 'english':
+                            char_assignments[i] = 'english'
+                            assigned = True
+                        elif i < len(text) - 1 and char_assignments[i+1] == 'english':
+                            char_assignments[i] = 'english'
+                            assigned = True
+                        elif i > 0 and char_assignments[i-1] == 'japanese':
+                            char_assignments[i] = 'japanese'
+                            assigned = True
+                        elif i < len(text) - 1 and char_assignments[i+1] == 'japanese':
+                            char_assignments[i] = 'japanese'
+                            assigned = True
+                        
+                        if not assigned:
+                            char_assignments[i] = 'chinese'
+                            
+                    elif char in '.,!?;:()[]{}？！。：；，':
+                        # 标点符号根据其所属的语句内容分配
+                        assigned = False
+                        
+                        # 对于句末标点（如问号、感叹号、句号），应该跟随它所结束的句子
+                        if char in '!?。！？':
+                            # 查找前面最近的非空格字符
+                            if i > 0:
+                                j = i - 1
+                                while j >= 0 and text[j] == ' ':
+                                    j -= 1
+                                if j >= 0:
+                                    # 句末标点跟随前面的字符
+                                    char_assignments[i] = char_assignments[j]
+                                    assigned = True
+                        
+                        # 对于其他标点符号，根据上下文智能分配
+                        if not assigned:
+                            # 检查前面的字符类型
+                            prev_assignment = None
+                            if i > 0:
+                                j = i - 1
+                                while j >= 0 and text[j] == ' ':
+                                    j -= 1
+                                if j >= 0:
+                                    prev_assignment = char_assignments[j]
+                            
+                            # 检查后面的字符类型
+                            next_assignment = None
+                            if i < len(text) - 1:
+                                j = i + 1
+                                while j < len(text) and text[j] == ' ':
+                                    j += 1
+                                if j < len(text):
+                                    next_assignment = char_assignments[j] if char_assignments[j] != 'unassigned' else None
+                            
+                            # 分配策略
+                            if prev_assignment:
+                                char_assignments[i] = prev_assignment
+                            elif next_assignment:
+                                char_assignments[i] = next_assignment
+                            else:
+                                char_assignments[i] = 'chinese'
+                    else:
+                        # 其他字符默认分配给中文
+                        char_assignments[i] = 'chinese'
             
-            # 清理多余空格
-            japanese_text = re.sub(r'\s+', ' ', japanese_text).strip()
-            english_text = re.sub(r'\s+', ' ', english_text).strip()
-            chinese_text = re.sub(r'\s+', ' ', chinese_text).strip()
+            # 收集各语言的字符
+            japanese_chars = []
+            english_chars = []
+            chinese_chars = []
+            
+            for i, assignment in enumerate(char_assignments):
+                char = text[i]
+                if assignment == 'japanese':
+                    japanese_chars.append(char)
+                elif assignment == 'english':
+                    english_chars.append(char)
+                elif assignment == 'chinese':
+                    chinese_chars.append(char)
+            
+            # 合并各部分并清理空格
+            japanese_text = re.sub(r'\s+', ' ', ''.join(japanese_chars)).strip()
+            english_text = re.sub(r'\s+', ' ', ''.join(english_chars)).strip()
+            chinese_text = re.sub(r'\s+', ' ', ''.join(chinese_chars)).strip()
             
             # 根据内容决定分离策略
             if len(chinese_text) > 0 and (len(japanese_text) > 0 or len(english_text) > 0):
@@ -375,8 +440,6 @@ class LyricsProcessor:
                 
                 first_line = ' '.join(first_line_parts).strip()
                 return [first_line, chinese_text]
-            # 如果只有日英，无中文：不分离，保持原文
-            # 因为要求是只将中文移到第二行，日英保持原位置
         
         # 如果是纯中英文（无日文），也进行分离
         elif has_english and has_kanji and not is_japanese_context:
