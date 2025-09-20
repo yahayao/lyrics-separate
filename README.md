@@ -25,13 +25,14 @@
 - **汉字智能归属**：通过相邻字符上下文分析，准确判断汉字属于日文还是中文
 - **分离策略**：将日文和英文保持在第一行，中文内容移到第二行（保持相同时间戳）
 
-### 🎵 支持的音频格式
+### 🎵 支持的格式
 | 格式 | 主要标签字段 | 备用字段 | 特殊处理 |
 |------|-------------|----------|----------|
 | **FLAC** | `LYRICS` | `UNSYNCED LYRICS`, `UNSYNCEDLYRICS`, `lyrics` | 自动编码检测 |
 | **MP3** | `USLT` (ID3v2) | `TXXX:LYRICS`, `COMM::eng` | ID3标签自动创建 |
 | **OGG** | `LYRICS` | `UNSYNCED LYRICS` | Vorbis Comment |
 | **MP4/M4A** | `©lyr` | `lyr`, `LYRICS` | iTunes兼容 |
+| **LRC** | 歌词文件内容 | - | 多编码自动检测，UTF-8输出 |
 
 ### 🔧 高级特性
 - **时间戳保持**：`[mm:ss.xxx]` 格式时间戳在分离后完全保持
@@ -66,7 +67,7 @@ pip install -i https://pypi.tuna.tsinghua.edu.cn/simple mutagen chardet
 
 #### 单文件处理
 ```bash
-# 基本用法 - 处理单个音频文件
+# 基本用法 - 处理单个文件
 python lyrics_processor.py "path/to/your/song.flac"
 
 # 预览模式 - 仅查看分离结果，不修改文件
@@ -161,27 +162,6 @@ lyrics-separate/
 3. **独立的汉字序列** → 归属为中文
 4. **空格和标点符号** → 按上下文就近分配
 
-## 🎵 支持的音频格式和标签
-
-### FLAC文件
-- **主要标签**：`LYRICS`
-- **备用标签**：`UNSYNCED LYRICS`, `UNSYNCEDLYRICS`, `lyrics`
-- **编码支持**：自动检测 UTF-8、GBK、GB2312 等编码
-
-### MP3文件 (ID3标签)
-- **主要标签**：`USLT` (Unsynchronized Lyrics)
-- **备用标签**：`TXXX:LYRICS`, `TXXX:lyrics`, `TXT`, `COMM::eng`
-- **版本支持**：ID3v2.3、ID3v2.4
-
-### OGG文件 (Vorbis Comment)
-- **支持标签**：`LYRICS`, `UNSYNCED LYRICS`, `UNSYNCEDLYRICS`
-- **编码**：标准 UTF-8 编码
-
-### MP4/M4A文件
-- **主要标签**：`©lyr` (标准 iTunes 歌词标签)
-- **备用标签**：`lyr`, `LYRICS`
-- **兼容性**：iTunes、Apple Music 完全兼容
-
 ## ⚠️ 重要说明
 
 ### 安全保护
@@ -258,61 +238,6 @@ python lyrics_processor.py "D:\Music" --preview
 
 ## 🔧 技术架构
 
-### 核心类设计
-```python
-class LyricsProcessor:
-    def __init__(self)
-        self.supported_formats = ['.flac', '.mp3', '.ogg', '.m4a', '.mp4']
-    
-    # 核心方法
-    def detect_encoding(self, text_bytes)        # 智能编码检测
-    def extract_lyrics_from_file(self, file_path) # 多格式歌词提取
-    def parse_bilingual_lyrics(self, lyrics_text) # 双语歌词解析
-    def _separate_languages(self, text)          # 语言分离核心算法
-    def inject_lyrics_to_file(self, file_path, lyrics) # 歌词写回
-    def process_single_file(self, file_path)     # 单文件处理流程
-    def process_directory(self, directory_path)  # 批量处理流程
-    
-    # 格式特定方法
-    def _extract_flac_lyrics(self, audio_file)   # FLAC歌词提取
-    def _extract_mp3_lyrics(self, audio_file)    # MP3 ID3歌词提取
-    def _extract_ogg_lyrics(self, audio_file)    # OGG歌词提取
-    def _extract_mp4_lyrics(self, audio_file)    # MP4歌词提取
-    def _inject_*_lyrics(self, audio_file, lyrics) # 对应注入方法
-```
-
-### 🧠 核心算法详解
-
-#### 1. 语言识别字符范围
-```python
-has_hiragana = bool(re.search(r'[\u3040-\u309f]', text))  # 平假名
-has_katakana = bool(re.search(r'[\u30a0-\u30ff]', text))  # 片假名  
-has_kanji = bool(re.search(r'[\u4e00-\u9fff]', text))     # CJK汉字
-has_english = bool(re.search(r'[a-zA-Z]', text))          # ASCII字母
-```
-
-#### 2. 汉字归属判断算法
-```python
-# 紧邻假名检测（前后1个字符）
-is_japanese_kanji = (prev_char in hiragana/katakana or 
-                    next_char in hiragana/katakana)
-
-# 连续汉字序列与假名相邻检测
-# 查找汉字序列边界，检查序列两端是否有假名
-```
-
-#### 3. 时间戳处理
-- **正则匹配**：`r'^(\[\d{2}:\d{2}\.\d{2,3}\])'`
-- **时间戳复制**：分离后的每行歌词都添加相同的原始时间戳
-- **格式保持**：支持 `[mm:ss.xx]` 和 `[mm:ss.xxx]` 格式
-
-#### 4. 编码检测策略
-```python
-detected = chardet.detect(text_bytes)
-confidence = detected.get('confidence', 0)
-# 置信度 < 0.7 时默认使用 UTF-8
-encoding = 'utf-8' if confidence < 0.7 else detected.get('encoding')
-```
 
 ### 🗃️ 文件处理流程
 1. **格式检测** → 验证文件扩展名是否支持
@@ -328,22 +253,12 @@ encoding = 'utf-8' if confidence < 0.7 else detected.get('encoding')
 - **chardet** ≥ 4.0.0：统计学文本编码检测  
 - **Python标准库**：re, os, sys, argparse, shutil
 
-## 📄 许可证
-
-本项目采用 MIT 许可证，详见 LICENSE 文件。
-
 ## 🤝 贡献指南
 
 ### 报告问题
 - 提交 Issue 时请提供具体的错误信息和文件样本
 - 说明操作系统、Python版本和音频文件格式
 - 如可能，请提供导致问题的歌词内容示例
-
-### 功能建议  
-- 新语言支持（韩语、泰语等）
-- 更多音频格式支持
-- 分离算法优化
-- 用户界面开发
 
 ### 开发贡献
 1. Fork 本项目
@@ -352,17 +267,11 @@ encoding = 'utf-8' if confidence < 0.7 else detected.get('encoding')
 4. 推送到分支 (`git push origin feature/AmazingFeature`)
 5. 创建 Pull Request
 
-## 📞 支持与联系
-
-- **项目主页**：[GitHub Repository](https://github.com/yahayao/lyrics-sprate)
-- **问题反馈**：通过 GitHub Issues 提交
-- **功能建议**：欢迎在 Issues 中讨论
-
 ## 📋 更新日志
 
 ### v1.0.0 (2025-09-20)
 - ✅ 完成核心双语歌词分离功能
-- ✅ 支持FLAC、MP3、OGG、MP4格式
+- ✅ 支持FLAC、MP3、OGG、MP4、LRC格式
 - ✅ 实现智能编码检测
 - ✅ 添加批量处理和预览模式
 - ✅ 完善错误处理和统计报告

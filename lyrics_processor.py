@@ -2,11 +2,11 @@
 # -*- coding: utf-8 -*-
 """
 音频文件歌词标签处理程序
-支持提取、处理和注入多语言双语歌词到音频文件标签中
-- 支持中英、日英双语歌词分离
+支持提取、处理和注入多语言双语歌词到音频文件标签和LRC歌词文件中
+- 支持中英、日中双语歌词分离
 - 智能识别平假名、片假名、汉字、英文
 - 将混合语言的单行歌词分离为多行统一时间戳歌词
-支持的格式：FLAC, MP3, OGG, MP4/M4A
+支持的格式：FLAC, MP3, OGG, MP4/M4A, LRC
 """
 
 import os
@@ -26,7 +26,7 @@ class LyricsProcessor:
     """歌词处理器类"""
     
     def __init__(self):
-        self.supported_formats = ['.flac', '.mp3', '.ogg', '.m4a', '.mp4']
+        self.supported_formats = ['.flac', '.mp3', '.ogg', '.m4a', '.mp4', '.lrc']
         
     def detect_encoding(self, text_bytes: bytes) -> str:
         """检测文本编码"""
@@ -45,7 +45,12 @@ class LyricsProcessor:
         return encoding or 'utf-8'
     
     def extract_lyrics_from_file(self, file_path: str) -> Optional[str]:
-        """从音频文件标签中提取歌词"""
+        """从音频文件标签或LRC文件中提取歌词"""
+        # 检查是否是LRC文件
+        file_ext = os.path.splitext(file_path)[1].lower()
+        if file_ext == '.lrc':
+            return self._extract_lrc_lyrics(file_path)
+        
         try:
             audio_file = MutagenFile(file_path)
             if audio_file is None:
@@ -153,6 +158,36 @@ class LyricsProcessor:
                     return str(lyrics_data)
         
         return None
+    
+    def _extract_lrc_lyrics(self, file_path: str) -> Optional[str]:
+        """从LRC文件提取歌词"""
+        try:
+            # 尝试以不同编码读取LRC文件
+            encodings = ['utf-8', 'gbk', 'gb2312', 'big5', 'utf-16']
+            
+            for encoding in encodings:
+                try:
+                    with open(file_path, 'r', encoding=encoding) as f:
+                        content = f.read()
+                    return content
+                except UnicodeDecodeError:
+                    continue
+                except Exception:
+                    continue
+            
+            # 如果所有编码都失败，尝试二进制读取并自动检测编码
+            try:
+                with open(file_path, 'rb') as f:
+                    raw_data = f.read()
+                encoding = self.detect_encoding(raw_data)
+                return raw_data.decode(encoding, errors='ignore')
+            except Exception as e:
+                print(f"LRC文件读取失败 {file_path}: {str(e)}")
+                return None
+                
+        except Exception as e:
+            print(f"LRC文件处理失败 {file_path}: {str(e)}")
+            return None
     
     def parse_bilingual_lyrics(self, lyrics_text: str) -> List[str]:
         """解析双语歌词，将单行双语歌词分离成两行"""
@@ -376,7 +411,12 @@ class LyricsProcessor:
         return [text]
     
     def inject_lyrics_to_file(self, file_path: str, lyrics: str) -> bool:
-        """将处理后的歌词注入音频文件标签"""
+        """将处理后的歌词注入音频文件标签或LRC文件"""
+        # 检查是否是LRC文件
+        file_ext = os.path.splitext(file_path)[1].lower()
+        if file_ext == '.lrc':
+            return self._inject_lrc_lyrics(file_path, lyrics)
+        
         try:
             audio_file = MutagenFile(file_path)
             if audio_file is None:
@@ -442,6 +482,17 @@ class LyricsProcessor:
             return True
         except Exception as e:
             print(f"MP4歌词注入失败: {str(e)}")
+            return False
+    
+    def _inject_lrc_lyrics(self, file_path: str, lyrics: str) -> bool:
+        """向LRC文件注入歌词"""
+        try:
+            # 使用UTF-8编码写入LRC文件
+            with open(file_path, 'w', encoding='utf-8') as f:
+                f.write(lyrics)
+            return True
+        except Exception as e:
+            print(f"LRC歌词注入失败: {str(e)}")
             return False
     
     def process_single_file(self, file_path: str, backup: bool = True) -> bool:
