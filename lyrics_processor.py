@@ -363,12 +363,24 @@ class LyricsProcessor:
                         if not assigned:
                             char_assignments[i] = 'chinese'
                             
-                    elif char in '.,!?;:()[]{}？！。：；，':
+                    elif char in '.,!?;:()[]{}？！。：；，「」"""\'\'':
                         # 标点符号根据其所属的语句内容分配
                         assigned = False
                         
+                        # 特殊处理引号对
+                        if char in '「」':
+                            # 日文引号应该跟日文内容
+                            # 检查引号内外的内容来判断归属
+                            char_assignments[i] = 'japanese'
+                            assigned = True
+                        elif char in '""\'\'':
+                            # 英文引号应该跟英文内容
+                            # 检查引号内外的内容来判断归属
+                            char_assignments[i] = 'english'
+                            assigned = True
+                        
                         # 对于句末标点（如问号、感叹号、句号），应该跟随它所结束的句子
-                        if char in '!?。！？':
+                        elif char in '!?。！？':
                             # 查找前面最近的非空格字符
                             if i > 0:
                                 j = i - 1
